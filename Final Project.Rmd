@@ -1,0 +1,216 @@
+---
+title: "Final Project"
+author: "Jeremy Welty"
+date: "2026-05-02"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(igraph)
+library(dplyr) 
+library(threejs)
+
+```
+
+# Krackhardt's Advice Network
+In 1987, David Krackhardt collected data from 21 managers in a machine manufacturing firm, asking each of them who they go to for advice, as well as who the other managers go to for advice. This creates a group of 21 adjacency matrices, that are each 21x21, each embedded with the layout of an advice network from one person's perspective.
+
+My main task in this project will be conceptualizing this advice network as a whole, as well as analyze the differences in perception among the members of the network. This analysis will bring to light the nature of this workplace, as well as how perceptions of a network differ amongst its members. 
+
+## Part 1: Data Transformation
+First, I bring in each adjacency matrix.
+```{r}
+
+a1 <- read.csv(file.choose(), row.names = 1)
+  a2 <- read.csv(file.choose(), row.names = 1)
+a3 <- read.csv(file.choose(), row.names = 1)
+a4 <- read.csv(file.choose(), row.names = 1)
+a5 <- read.csv(file.choose(), row.names = 1)
+a6 <- read.csv(file.choose(), row.names = 1)
+a7 <- read.csv(file.choose(), row.names = 1)
+a8 <- read.csv(file.choose(), row.names = 1)
+a9 <- read.csv(file.choose(), row.names = 1)
+a10 <- read.csv(file.choose(), row.names = 1)
+a11 <- read.csv(file.choose(), row.names = 1)
+a12 <- read.csv(file.choose(), row.names = 1)
+a13 <- read.csv(file.choose(), row.names = 1)
+a14 <- read.csv(file.choose(), row.names = 1)
+a15 <- read.csv(file.choose(), row.names = 1)
+a16 <- read.csv(file.choose(), row.names = 1)
+a17 <- read.csv(file.choose(), row.names = 1)
+a18 <- read.csv(file.choose(), row.names = 1)
+a19 <- read.csv(file.choose(), row.names = 1)
+a20 <- read.csv(file.choose(), row.names = 1)
+a21 <- read.csv(file.choose(), row.names = 1)
+```
+
+Each adjacency matrix only contains the network through the eyes of one member. Looking at all 21 together will be messy, so I am going to combine these into one weighted network. The weight of each edge reflects the number of members that perceive that connection. 
+
+```{r}
+mat <- list(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21)  
+
+mats <- lapply(mat, as.matrix)  
+
+A <- simplify2array(mats)  
+
+A_sum <- apply(A, c(1,2), sum)  
+
+advice_network <- graph_from_adjacency_matrix(A_sum, mode = "directed", weighted = TRUE)
+```
+
+This combined network has nearly every person connected, so I am going to enforce a stipulation on what we will count as a connection that has some general consensus. Hence, I'll remove all edges that less than 50% of members agree on.
+
+```{r}
+
+advice_network_clean <- delete.edges(advice_network, which(E(advice_network)$weight<11))
+```
+
+We've got a pretty good generalized form of the network now! On to visualization.
+
+## Part 2: Data Visualisation
+
+First, let's take a basic look at this network. I've sized everything accordingly, and the edges are both labeled and widened by their weight. 
+```{r}
+plot(advice_network_clean, vertex.label.color = "black", vertex.label.cex = 0.6, vertex.color = "gray", edge.color = "gray", edge.label = E(advice_network_clean)$weight, edge.label.cex = 0.5, edge.arrow.size = 0.5, edge.width = E(advice_network_clean)$weight/10, layout = layout_with_kk(advice_network_clean), main = "Advice Network", sub = "Advice connections with > 50% Agreement")
+```
+
+With this visualization, we see that even with our stipulation, there's still a lot of connections here. It seems like at least a majority agree that the network is pretty well connected, and we already see some groups, as well as popular members. Note that Krackhardt kept his data anonymous, so I'll refer to members by their given number. 
+
+
+I'll now take a step up to visualize some of those important members we saw. Here, I classify nodes based on their popularity and influence. Again, I'll use 50% as my benchmark, so coworkers that are over 50% of the network go to for advice will be in green, and coworkers that influence over 50% of the network will be in orange. 
+
+```{r}
+deg <- igraph::degree(advice_network_clean, mode = "in")
+btwn <- igraph::betweenness(advice_network_clean)
+advice_network_intermediate <- advice_network_clean
+
+par(mfrow = c(1, 2))  # 1 row, 2 columns
+V(advice_network_intermediate)$color <- ifelse(deg > 10, "green","gray")
+plot(advice_network_intermediate, layout = layout_with_kk(advice_network_intermediate), vertex.label.cex = 0.6, vertex.size = 20, vertex.label.color = "black", edge.arrow.size = 0.5, edge.color = "gray", main = "Popular Advice-Givers", sub = "Advice connections with > 50% Agreement \n and Popularity > 50%")
+V(advice_network_intermediate)$color <- ifelse(btwn > 10, "orange","gray")
+plot(advice_network_intermediate, layout = layout_with_kk(advice_network_intermediate), vertex.label.cex = 0.6, vertex.size = 20, vertex.label.color = "black", edge.arrow.size = 0.5, edge.color = "gray", main = "Connecting Advice-Givers", sub = "Advice connections with > 50% Agreement \n and Betweenness > 50%")
+```
+
+We see that there are only 3 members (X2, X14, and X18) that reach 50% popularity, while over a third of the network reaches 50% influence. This makes sense for an office network, as coworkers have different expertise and project teams. It's more often that someone would go to someone for advice, who would then go to someone else, following a chain of command, than everyone going to the same person. 
+
+
+Now, I'm going to create a more advanced, interactive visualization of the network, to focus on some of the groupings we saw earlier. This time, I'm going to increase the stipulation to 75% agreement, so that we can more clearly see groupings, especially since we won't see directedness in connections here. I'm using the Louvain algorithm for clustering, which will appear through color. I'm also allowing the degree of each member affect its size, so more popular members will appear larger. 
+```{r}
+advice_network_advanced <- delete.edges(advice_network, which(E(advice_network)$weight<17))
+
+clustered <- as.undirected(advice_network_advanced)
+
+clust <- cluster_louvain(clustered)
+
+V(advice_network_advanced)$color <- clust$membership
+
+V(advice_network_advanced)$size <- 5 + deg / 1.5
+
+
+advice_network3D <- graphjs(advice_network_advanced, 
+                        edge.color = "gray",
+                        bg = "white", 
+                        main = "Advice Network Groups based on 75% Agreement",
+                        vertex.label = V(advice_network_advanced)$name,)
+
+advice_network3D
+
+```
+
+
+From this visualization, we see three distinct groups, and they each seem to have one or two central members that the rest are connected to. Given the workplace context, these may be three separate sectors of the team, with the largest nodes being the connection points between teams; perhaps team leads.
+
+## Part 3: Data Analysis 
+For our analysis, I'm going to bring back the original individual networks, because I want to analyze the relation between perception and a person's popularity and influence in the overall network. So, I bring in each network and record its density, a number that will reflect how connected each person views the network.
+```{r}
+p1graph <- graph_from_adjacency_matrix(as.matrix(a1), mode = "directed")
+p2graph <- graph_from_adjacency_matrix(as.matrix(a2), mode = "directed")
+p3graph <- graph_from_adjacency_matrix(as.matrix(a3), mode = "directed")
+p4graph <- graph_from_adjacency_matrix(as.matrix(a4), mode = "directed")
+p5graph <- graph_from_adjacency_matrix(as.matrix(a5), mode = "directed")
+p6graph <- graph_from_adjacency_matrix(as.matrix(a6), mode = "directed")
+p7graph <- graph_from_adjacency_matrix(as.matrix(a7), mode = "directed")
+p8graph <- graph_from_adjacency_matrix(as.matrix(a8), mode = "directed")
+p9graph <- graph_from_adjacency_matrix(as.matrix(a9), mode = "directed")
+p10graph <- graph_from_adjacency_matrix(as.matrix(a10), mode = "directed")
+p11graph <- graph_from_adjacency_matrix(as.matrix(a11), mode = "directed")
+p12graph <- graph_from_adjacency_matrix(as.matrix(a12), mode = "directed")
+p13graph <- graph_from_adjacency_matrix(as.matrix(a13), mode = "directed")
+p14graph <- graph_from_adjacency_matrix(as.matrix(a14), mode = "directed")
+p15graph <- graph_from_adjacency_matrix(as.matrix(a15), mode = "directed")
+p16graph <- graph_from_adjacency_matrix(as.matrix(a16), mode = "directed")
+p17graph <- graph_from_adjacency_matrix(as.matrix(a17), mode = "directed")
+p18graph <- graph_from_adjacency_matrix(as.matrix(a18), mode = "directed")
+p19graph <- graph_from_adjacency_matrix(as.matrix(a19), mode = "directed")
+p20graph <- graph_from_adjacency_matrix(as.matrix(a20), mode = "directed")
+p21graph <- graph_from_adjacency_matrix(as.matrix(a21), mode = "directed")
+den1 <- edge_density(p1graph)
+den2 <- edge_density(p2graph)
+den3 <- edge_density(p3graph)
+den4 <- edge_density(p4graph)
+den5 <- edge_density(p5graph)
+den6 <- edge_density(p6graph)
+den7 <- edge_density(p7graph)
+den8 <- edge_density(p8graph)
+den9 <- edge_density(p9graph)
+den10 <- edge_density(p10graph)
+den11 <- edge_density(p11graph)
+den12 <- edge_density(p12graph)
+den13 <- edge_density(p13graph)
+den14 <- edge_density(p14graph)
+den15 <- edge_density(p15graph)
+den16 <- edge_density(p16graph)
+den17 <- edge_density(p17graph)
+den18 <- edge_density(p18graph)
+den19 <- edge_density(p19graph)
+den20 <- edge_density(p20graph)
+den21 <- edge_density(p21graph)
+density <- c(den1, den2, den3, den4, den5, den6, den7, den8, den9, den10, den11, den12, den13, den14, den15, den16, den17, den18, den19, den20, den21)
+```
+
+To analyze this on a micro level, I'm going to create a table of these values, as well as plot a person's perceived network density against their popularity and influence.
+```{r}
+
+data.frame(
+  Popularity = deg,
+  Influence = btwn,
+  Density = density
+)
+
+plot(deg, density)
+plot(btwn, density)
+
+```
+
+We can see here in the numbers just what we saw in the visualizations - only a few members are highly popular. The influence also appears to have very high variance; either you're highly influential, or you're not very influential at all. We can conclude that there's definitely coworkers who are tasked with interfacing within their team and among others, while some coworkers are more focused on their own tasks, with perhaps one or two points of contact with the rest of the network. 
+As it relates to their perceived density, we don't see a drastic correlation. There is a slight trend towards perception of density dropping with influence and popularity. This may indicate that those that have lots of people that come to them for advice see the network as less connected, since they see themselves at the focal point of it. 
+
+Let's take another look at those groups from before, with the 75% stipulation.
+```{r}
+clust <- cluster_louvain(clustered)
+
+V(advice_network_advanced)$color <- clust$membership
+plot(advice_network_advanced, layout = layout_with_fr(advice_network_advanced), vertex.label.cex = 0.6, vertex.size = 20, edge.arrow.size = E(advice_network_advanced)$weight/20)
+```
+Each team seems to have a different way of working. The blue team here is highly centered around X14 - one of our top managers. On the other hand, the yellow and green teams are a bit more fractured, indicating a higher degree of interworking amongst them. 
+
+Finally, let's analyze the network as a whole. I'm going to measure the density, reciprocity, and transitivity of the 50% network.
+```{r}
+
+
+
+dense <- edge_density(advice_network_clean)
+recip <- reciprocity(advice_network_clean, mode = c("ratio"))
+trans <- transitivity(advice_network_clean)
+
+data.frame (
+reciprocity = recip,
+density = dense,
+transitivity = trans
+)
+
+
+```
+The density is at about 23%, which indicates that there could be a lot more connections, but those popularity skews within teams limit that possibility. The reciprocity is at a similar level, which reflects the chain of command we'd expect in an office network. It's more likely someone will look for advice going up then going back down. Finally, the transitivity is pretty high, indicating that we have a fair amount of social closure, which makes sense among a sectored workplace. 
+
+In conclusion, we see that this network may look a lot different depending on who you ask, but it's clear that the phenomenons of a divided workplace culture are evident in the perception of most. Work is divided amongst teams with clear leaders, and only a few at the very top are sought out for advice by most everyone. Further research with a larger sample size may glean more insights into the relationship between someone's position in a network and how they perceive it. 
